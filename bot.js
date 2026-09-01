@@ -3,31 +3,31 @@
  * each row, and if either value is a number lower than 5, it sends that
  * row back to the user as a separate message.
  *
+ * DEPLOYMENT NOTE (Render Web Service):
+ * This version runs in WEBHOOK mode instead of long-polling. Render's free
+ * tier spins the instance down after ~15 min without inbound HTTP traffic,
+ * which would kill a long-polling loop for good. With webhooks, Telegram
+ * itself sends the HTTP request that wakes the instance back up, so the
+ * bot can recover on its own instead of staying dead. See README.md for
+ * full deployment instructions.
+ *
  * Requires Node.js 18+ (uses native fetch).
- *
- * Setup:
- *   1. npm install
- *   2. Get a bot token from @BotFather on Telegram.
- *   3. Set it as an environment variable:
- *        export BOT_TOKEN="123456:ABC-your-token-here"
- *      (Windows CMD: set BOT_TOKEN=123456:ABC-your-token-here)
- *   4. Run:
- *        npm start
- *
- * Usage:
- *   - Open a chat with your bot on Telegram.
- *   - Send /start to see instructions.
- *   - Send it an .xlsx file as a document.
- *   - The bot replies with one message per row where column F or G
- *     contains a number lower than 5.
  */
 
+import express from "express";
 import { Telegraf } from "telegraf";
 import ExcelJS from "exceljs";
+import crypto from "crypto";
 import dotenv from "dotenv";
 
 dotenv.config();
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 3000;
+
+// Render sets this automatically for every web service. Falls back to a
+// manually-set WEBHOOK_URL for local testing with a tunnel (e.g. ngrok).
+const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL;
 
 if (!BOT_TOKEN) {
   console.error(
@@ -36,7 +36,32 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
+if (!PUBLIC_URL) {
+  console.error(
+    "No public URL found. On Render this comes from RENDER_EXTERNAL_URL automatically. " +
+      "For local/manual runs, set WEBHOOK_URL to a publicly reachable https URL (e.g. an ngrok tunnel)."
+  );
+  process.exit(1);
+}
+
 const THRESHOLD = 5;
+
+// A random-ish but stable path so random internet traffic can't hit your
+// webhook endpoint and pretend to be Telegram. Derived from the bot token
+// so it doesn't need its own env var, but isn't guessable without the token.
+const WEBHOOK_PATH = `/telegraf/${crypto
+  .createHash("sha256")
+  .update(BOT_TOKEN)
+  .digest("hex")
+  .slice(0, 32)}`;
+
+// Telegram can also send a secret header we can verify on every request,
+// as extra protection against spoofed webhook calls.
+const WEBHOOK_SECRET = crypto
+  .createHash("sha256")
+  .update(`${BOT_TOKEN}:secret`)
+  .digest("hex")
+  .slice(0, 32);
 
 // Column letters -> 1-indexed column numbers (ExcelJS uses 1-indexed columns)
 const COL = {
@@ -190,8 +215,59 @@ bot.on("document", async (ctx) => {
   }
 });
 
-bot.launch().then(() => console.log("Bot is up and running..."));
+bot.catch((err, ctx) => {
+  console.error(`Telegraf error for update ${ctx.updateType}:`, err);
+});
 
-// Enable graceful stop
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// ---------------------------------------------------------------------
+// Express server: this is what makes the app a valid Render Web Service.
+// Render requires the process to bind to process.env.PORT and answer
+// HTTP requests — that's how it knows the service is alive, and it's also
+// what lets Telegram's webhook calls (or an external pinger) wake it up.
+// ---------------------------------------------------------------------
+const app = express();
+
+// Telegraf needs the raw JSON body of incoming updates.
+app.use(express.json());
+
+// Health check / keep-alive endpoint. Render's own health checks hit this,
+// and you can optionally point an external uptime pinger (see README) at
+// it to reduce how often the instance goes to sleep.
+app.get("/", (req, res) => {
+  res.status(200).send("Bot is running.");
+});
+
+// Telegram webhook endpoint. Only requests carrying the correct secret
+// header are treated as genuine Telegram traffic.
+app.post(WEBHOOK_PATH, (req, res, next) => {
+  const incomingSecret = req.header("X-Telegram-Bot-Api-Secret-Token");
+  if (incomingSecret !== WEBHOOK_SECRET) {
+    return res.sendStatus(401);
+  }
+  return next();
+});
+app.use(bot.webhookCallback(WEBHOOK_PATH));
+
+async function main() {
+  const webhookUrl = `${PUBLIC_URL.replace(/\/+$/, "")}${WEBHOOK_PATH}`;
+
+  await bot.telegram.setWebhook(webhookUrl, {
+    secret_token: WEBHOOK_SECRET,
+  });
+
+  const info = await bot.telegram.getWebhookInfo();
+  console.log("Webhook set to:", info.url);
+
+  app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
+}
+
+main().catch((err) => {
+  console.error("Failed to start bot:", err);
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.once("SIGINT", () => process.exit(0));
+process.once("SIGTERM", () => process.exit(0));
