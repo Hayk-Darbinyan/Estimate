@@ -1,19 +1,3 @@
-/**
- * Telegram bot: upload an .xlsx file, the bot checks columns F and G for
- * each row, and if either value is a number lower than 5, it sends that
- * row back to the user as a separate message.
- *
- * DEPLOYMENT NOTE (Render Web Service):
- * This version runs in WEBHOOK mode instead of long-polling. Render's free
- * tier spins the instance down after ~15 min without inbound HTTP traffic,
- * which would kill a long-polling loop for good. With webhooks, Telegram
- * itself sends the HTTP request that wakes the instance back up, so the
- * bot can recover on its own instead of staying dead. See README.md for
- * full deployment instructions.
- *
- * Requires Node.js 18+ (uses native fetch).
- */
-
 import express from "express";
 import { Telegraf } from "telegraf";
 import ExcelJS from "exceljs";
@@ -31,7 +15,7 @@ const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL;
 
 if (!BOT_TOKEN) {
   console.error(
-    "BOT_TOKEN environment variable is not set. Get a token from @BotFather and set it before running."
+    "BOT_TOKEN environment variable is not set. Get a token from @BotFather and set it before running.",
   );
   process.exit(1);
 }
@@ -39,7 +23,7 @@ if (!BOT_TOKEN) {
 if (!PUBLIC_URL) {
   console.error(
     "No public URL found. On Render this comes from RENDER_EXTERNAL_URL automatically. " +
-      "For local/manual runs, set WEBHOOK_URL to a publicly reachable https URL (e.g. an ngrok tunnel)."
+      "For local/manual runs, set WEBHOOK_URL to a publicly reachable https URL (e.g. an ngrok tunnel).",
   );
   process.exit(1);
 }
@@ -139,7 +123,7 @@ bot.start((ctx) => {
     "Ուղարկեք .xlsx ֆայլ, ես կստուգեմ F և G սյուները։\n\n" +
       "Send me an .xlsx file and I'll check columns F and G. " +
       `Any row where F or G has a numeric value lower than ${THRESHOLD} ` +
-      "will be sent back to you as a separate message."
+      "will be sent back to you as a separate message.",
   );
 });
 
@@ -162,7 +146,7 @@ bot.on("document", async (ctx) => {
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-    const sheet = workbook.worksheets[0];
+    const sheet = workbook.worksheets[workbook.worksheets.length - 1];
 
     let matches = 0;
     let rowsChecked = 0;
@@ -177,12 +161,16 @@ bot.on("document", async (ctx) => {
 
       const get = (letter) => excelRow.getCell(COL[letter]).value;
 
-      const fVal = toNumber(get("F"));
-      const gVal = toNumber(get("G"));
-
+      const fRaw = get("F");
+      const gRaw = get("G");
+      const fVal = toNumber(fRaw);
+      const gVal = toNumber(gRaw);
+      const isDash = (v) => String(v ?? "").trim() === "-";
       const isLow =
         (fVal !== null && fVal < THRESHOLD) ||
-        (gVal !== null && gVal < THRESHOLD);
+        (gVal !== null && gVal < THRESHOLD) ||
+        isDash(fRaw) ||
+        isDash(gRaw);
 
       if (isLow) {
         const rowValues = {};
@@ -200,17 +188,17 @@ bot.on("document", async (ctx) => {
 
     if (matches === 0) {
       await ctx.reply(
-        `Checked ${rowsChecked} rows. No rows found with F or G below ${THRESHOLD}.`
+        `Checked ${rowsChecked} rows. No rows found with F or G below ${THRESHOLD}.`,
       );
     } else {
       await ctx.reply(
-        `Done. Checked ${rowsChecked} rows, found ${matches} matching row(s) above.`
+        `Done. Checked ${rowsChecked} rows, found ${matches} matching row(s) above.`,
       );
     }
   } catch (err) {
     console.error(err);
     await ctx.reply(
-      `Sorry, something went wrong while reading the file: ${err.message}`
+      `Sorry, something went wrong while reading the file: ${err.message}`,
     );
   }
 });
