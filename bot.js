@@ -101,14 +101,14 @@ function formatValue(value) {
 
 function buildMessage(row) {
   return (
-    `*1. Գնման ամսաթիվ* ${formatValue(row.A)}\n` +
-    `*2. Հեռախոսահամար* ${formatValue(row.B)}\n` +
-    `*3. Գնորդ* ${formatValue(row.C)}\n` +
-    `*4. Գնած մոդել* ${formatValue(row.D)}\n` +
-    `*5. Սպասարկող* ${formatValue(row.E)}\n` +
-    `*6. Սպասարկման գնահատական* ${formatValue(row.F)}\n` +
-    `*7. Գիտելիքի գնահատական* ${formatValue(row.G)}\n` +
-    `*8. Մեկնաբանություն* ${formatValue(row.I)}`
+    `*1. Գնման ամսաթիվ:* ${formatValue(row.A)}\n` +
+    `*2. Հեռախոսահամար:* ${formatValue(row.B)}\n` +
+    `*3. Գնորդ:* ${formatValue(row.C)}\n` +
+    `*4. Գնած մոդել:* ${formatValue(row.D)}\n` +
+    `*5. Սպասարկող:* ${formatValue(row.E)}\n` +
+    `*6. Սպասարկման գնահատական:* ${formatValue(row.F)}\n` +
+    `*7. Գիտելիքի գնահատական:* ${formatValue(row.G)}\n` +
+    `*8. Մեկնաբանություն:* ${formatValue(row.I)}`
   );
 }
 
