@@ -29,6 +29,8 @@ if (!PUBLIC_URL) {
 }
 
 const THRESHOLD = 5;
+const CHECK_RATINGS = "Ստուգել F և G սյուները";
+const CHECK_COMMENTS = "Մեկնաբանություն";
 
 // A random-ish but stable path so random internet traffic can't hit your
 // webhook endpoint and pretend to be Telegram. Derived from the bot token
@@ -99,6 +101,17 @@ function formatValue(value) {
   return String(value).trim();
 }
 
+function hasContent(value) {
+  if (value === null || value === undefined) return false;
+
+  if (typeof value === "object") {
+    if ("result" in value) return hasContent(value.result);
+    if ("text" in value) return hasContent(value.text);
+  }
+
+  return String(value).trim() !== "";
+}
+
 function buildMessage(row) {
   return (
     `*1. Գնման ամսաթիվ:* ${formatValue(row.A)}\n` +
@@ -117,17 +130,41 @@ function sleep(ms) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+const selectedModeByChat = new Map();
+
+const modeKeyboard = {
+  reply_markup: {
+    keyboard: [[CHECK_RATINGS, CHECK_COMMENTS]],
+    resize_keyboard: true,
+  },
+};
 
 bot.start((ctx) => {
   ctx.reply(
-    "Ուղարկեք .xlsx ֆայլ, ես կստուգեմ F և G սյուները։\n\n" +
-      "Send me an .xlsx file and I'll check columns F and G. " +
-      `Any row where F or G has a numeric value lower than ${THRESHOLD} ` +
-      "will be sent back to you as a separate message.",
+    "Ընտրեք ստուգման տեսակը, ապա ուղարկեք .xlsx ֆայլ։",
+    modeKeyboard,
+  );
+});
+
+bot.hears(CHECK_RATINGS, (ctx) => {
+  selectedModeByChat.set(ctx.chat.id, "ratings");
+  return ctx.reply(
+    `Ընտրված է F և G սյուների ստուգումը։ Ուղարկեք .xlsx ֆայլ։\n` +
+      `Կուղարկվեն այն տողերը, որտեղ F կամ G արժեքը ցածր է ${THRESHOLD}-ից։`,
+  );
+});
+
+bot.hears(CHECK_COMMENTS, (ctx) => {
+  selectedModeByChat.set(ctx.chat.id, "comments");
+  return ctx.reply(
+    "Ընտրված է մեկնաբանությունների ստուգումը։ Ուղարկեք .xlsx ֆայլ։",
   );
 });
 
 bot.on("document", async (ctx) => {
+  const mode = selectedModeByChat.get(ctx.chat.id);
+  if (!mode) return;
+
   const doc = ctx.message.document;
   const fileName = (doc.file_name || "").toLowerCase();
 
@@ -163,16 +200,16 @@ bot.on("document", async (ctx) => {
 
       const fRaw = get("F");
       const gRaw = get("G");
-      const fVal = toNumber(fRaw);
-      const gVal = toNumber(gRaw);
-      const isDash = (v) => String(v ?? "").trim() === "-";
+      const isDash = (value) => String(value ?? "").trim() === "-";
       const isLow =
-        (fVal !== null && fVal < THRESHOLD) ||
-        (gVal !== null && gVal < THRESHOLD) ||
+        (toNumber(fRaw) !== null && toNumber(fRaw) < THRESHOLD) ||
+        (toNumber(gRaw) !== null && toNumber(gRaw) < THRESHOLD) ||
         isDash(fRaw) ||
         isDash(gRaw);
+      const hasComment = hasContent(get("I"));
+      const shouldSend = mode === "ratings" ? isLow : hasComment;
 
-      if (isLow) {
+      if (shouldSend) {
         const rowValues = {};
         for (const letter of Object.keys(COL)) {
           rowValues[letter] = get(letter);
@@ -188,7 +225,9 @@ bot.on("document", async (ctx) => {
 
     if (matches === 0) {
       await ctx.reply(
-        `Checked ${rowsChecked} rows. No rows found with F or G below ${THRESHOLD}.`,
+        mode === "ratings"
+          ? `Checked ${rowsChecked} rows. No rows found with F or G below ${THRESHOLD}.`
+          : `Checked ${rowsChecked} rows. No rows found with a comment in column I.`,
       );
     } else {
       await ctx.reply(
