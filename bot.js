@@ -112,16 +112,23 @@ function hasContent(value) {
   return String(value).trim() !== "";
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function buildMessage(row) {
   return (
-    `*1. Գնման ամսաթիվ:* ${formatValue(row.A)}\n` +
-    `*2. Հեռախոսահամար:* ${formatValue(row.B)}\n` +
-    `*3. Գնորդ:* ${formatValue(row.C)}\n` +
-    `*4. Գնած մոդել:* ${formatValue(row.D)}\n` +
-    `*5. Սպասարկող:* ${formatValue(row.E)}\n` +
-    `*6. Սպասարկման գնահատական:* ${formatValue(row.F)}\n` +
-    `*7. Գիտելիքի գնահատական:* ${formatValue(row.G)}\n` +
-    `*8. Մեկնաբանություն:* ${formatValue(row.I)}`
+    `<b>1. Գնման ամսաթիվ:</b> ${escapeHtml(formatValue(row.A))}\n` +
+    `<b>2. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.B))}\n` +
+    `<b>3. Գնորդ:</b> ${escapeHtml(formatValue(row.C))}\n` +
+    `<b>4. Գնած մոդել:</b> ${escapeHtml(formatValue(row.D))}\n` +
+    `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
+    `<b>6. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
+    `<b>7. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
+    `<b>8. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
   );
 }
 
@@ -215,7 +222,7 @@ bot.on("document", async (ctx) => {
           rowValues[letter] = get(letter);
         }
         await ctx.reply(buildMessage(rowValues), {
-          parse_mode: "Markdown",
+          parse_mode: "HTML",
         });
         matches++;
         // small delay to be gentle on Telegram's rate limits
