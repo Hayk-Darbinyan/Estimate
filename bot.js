@@ -58,25 +58,55 @@ const COL = {
   I: 9, // Մեկնաբանություն
 };
 
+function parseMDYString(value) {
+  if (value === null || value === undefined) return null;
+
+  const trimmed = String(value).trim();
+  const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const parsedDate = new Date(year, month - 1, day);
+  if (
+    parsedDate.getFullYear() !== year ||
+    parsedDate.getMonth() !== month - 1 ||
+    parsedDate.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsedDate;
+}
+
 function toDate(value) {
   if (value === null || value === undefined) return null;
 
   if (typeof value === "object" && value !== null) {
     if ("result" in value) return toDate(value.result);
     if ("text" in value) return toDate(value.text);
-    if (value instanceof Date) return new Date(value.getTime());
+    if (value instanceof Date) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
   }
 
-  if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof Date) return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 
   if (typeof value === "number") {
-    const asDate = new Date(Date.UTC(1899, 11, 30) + value * 86400000);
+    const asDate = new Date(1899, 11, 30);
+    asDate.setDate(asDate.getDate() + value);
     return Number.isNaN(asDate.getTime()) ? null : asDate;
   }
 
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return null;
+
+    const mdY = parseMDYString(trimmed);
+    if (mdY) return mdY;
+
     const asDate = new Date(trimmed);
     return Number.isNaN(asDate.getTime()) ? null : asDate;
   }
@@ -85,10 +115,18 @@ function toDate(value) {
 }
 
 function dateKey(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
+  const dateObject = date instanceof Date ? date : toDate(date);
+  if (!dateObject) return null;
+
+  const y = dateObject.getFullYear();
+  const m = String(dateObject.getMonth() + 1).padStart(2, "0");
+  const d = String(dateObject.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function dateFromKey(dateKeyValue) {
+  const [year, month, day] = dateKeyValue.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function formatDate(date) {
@@ -157,21 +195,37 @@ function formatRangeLabel(startDate, endDate) {
 }
 
 function buildDateRangeButtons(records) {
-  const uniqueDates = [...new Set(records.map((record) => dateKey(record.A)))].sort(
-    (a, b) => new Date(a) - new Date(b),
-  );
+  const uniqueDates = [...new Set(records.map((record) => dateKey(record.A)))].sort();
+
+  if (uniqueDates.length === 0) {
+    return [
+      [{ text: "Check All", callback_data: "check_all" }],
+      [{ text: "Custom Date Range", callback_data: "custom_date_range" }],
+    ];
+  }
+
+  const startDate = dateFromKey(uniqueDates[0]);
+  const endDate = dateFromKey(uniqueDates[uniqueDates.length - 1]);
 
   const groups = [];
-  for (let index = 0; index < uniqueDates.length; index += DATE_GROUP_SIZE) {
-    const slice = uniqueDates.slice(index, index + DATE_GROUP_SIZE);
-    const startDate = new Date(slice[0]);
-    const endDate = new Date(slice[slice.length - 1]);
+  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+
+  while (cursor <= endDate) {
+    const groupStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
+    const groupEndRaw = new Date(
+      cursor.getFullYear(),
+      cursor.getMonth(),
+      cursor.getDate() + DATE_GROUP_SIZE - 1,
+    );
+    const groupEnd = groupEndRaw > endDate ? endDate : groupEndRaw;
 
     groups.push({
-      start: slice[0],
-      end: slice[slice.length - 1],
-      label: formatRangeLabel(startDate, endDate),
+      start: dateKey(groupStart),
+      end: dateKey(groupEnd),
+      label: formatRangeLabel(groupStart, groupEnd),
     });
+
+    cursor = new Date(groupEnd.getFullYear(), groupEnd.getMonth(), groupEnd.getDate() + 1);
   }
 
   return groups
@@ -327,23 +381,23 @@ bot.hears(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})$/i, async 
   const startRaw = ctx.match[1];
   const endRaw = ctx.match[2];
 
-  const startDate = toDate(startRaw);
-  const endDate = toDate(endRaw);
+  const startDate = parseMDYString(startRaw);
+  const endDate = parseMDYString(endRaw);
 
   if (!startDate || !endDate) {
     await ctx.reply("Invalid date format. Please use this format: 9/1/2026 - 9/7/2026");
     return;
   }
 
-  if (startDate > endDate) {
+  const startKey = dateKey(startDate);
+  const endKey = dateKey(endDate);
+
+  if (startKey > endKey) {
     await ctx.reply("The start date cannot be after the end date. Please enter the range again.");
     return;
   }
 
   const records = commentRecordsByChat.get(ctx.chat.id) || [];
-  const startKey = dateKey(startDate);
-  const endKey = dateKey(endDate);
-
   const filtered = records.filter((record) => {
     const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
     return date >= startKey && date <= endKey;
@@ -358,8 +412,8 @@ bot.action(/^date_range:([0-9-]+):([0-9-]+)$/, async (ctx, next) => {
 
   const records = commentRecordsByChat.get(ctx.chat.id) || [];
   const filtered = records.filter((record) => {
-    const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
-    return date >= startKey && date <= endKey;
+    const recordDate = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
+    return recordDate >= startKey && recordDate <= endKey;
   });
 
   await sendFilteredRecords(ctx, filtered);
