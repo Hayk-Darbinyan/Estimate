@@ -1,7 +1,7 @@
 {
   "name": "estimate",
   "version": "1.0.0",
-  "description": "Telegram bot that checks columns F and G of an uploaded xlsx file and reports rows with values below 5.",
+  "description": "Telegram bot for filtering uploaded Excel comment rows by date and showing rows with comments in column I.",
   "license": "ISC",
   "author": "",
   "type": "module",

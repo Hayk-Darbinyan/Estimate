@@ -28,9 +28,8 @@ if (!PUBLIC_URL) {
   process.exit(1);
 }
 
-const THRESHOLD = 5;
-const CHECK_RATINGS = "Ստուգել F և G սյուները";
 const CHECK_COMMENTS = "Մեկնաբանություն";
+const DATE_GROUP_SIZE = 5;
 
 // A random-ish but stable path so random internet traffic can't hit your
 // webhook endpoint and pretend to be Telegram. Derived from the bot token
@@ -56,29 +55,40 @@ const COL = {
   C: 3, // Գնորդ
   D: 4, // Գնած մոդել
   E: 5, // Սպասարկող
-  F: 6, // Սպասարկման գնահատական
-  G: 7, // Գիտելիքի գնահատական
   I: 9, // Մեկնաբանություն
 };
 
-function toNumber(value) {
+function toDate(value) {
   if (value === null || value === undefined) return null;
 
-  // ExcelJS may give { result: ... } for formula cells
-  if (typeof value === "object" && value !== null && "result" in value) {
-    return toNumber(value.result);
+  if (typeof value === "object" && value !== null) {
+    if ("result" in value) return toDate(value.result);
+    if ("text" in value) return toDate(value.text);
+    if (value instanceof Date) return new Date(value.getTime());
   }
 
-  if (typeof value === "number") return value;
+  if (value instanceof Date) return new Date(value.getTime());
+
+  if (typeof value === "number") {
+    const asDate = new Date(Date.UTC(1899, 11, 30) + value * 86400000);
+    return Number.isNaN(asDate.getTime()) ? null : asDate;
+  }
 
   if (typeof value === "string") {
-    const trimmed = value.trim().replace(",", ".");
-    if (trimmed === "") return null;
-    const num = Number(trimmed);
-    return Number.isNaN(num) ? null : num;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const asDate = new Date(trimmed);
+    return Number.isNaN(asDate.getTime()) ? null : asDate;
   }
 
   return null;
+}
+
+function dateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 function formatDate(date) {
@@ -126,9 +136,71 @@ function buildMessage(row) {
     `<b>3. Գնորդ:</b> ${escapeHtml(formatValue(row.C))}\n` +
     `<b>4. Գնած մոդել:</b> ${escapeHtml(formatValue(row.D))}\n` +
     `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
-    `<b>6. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
-    `<b>7. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
-    `<b>8. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
+    `<b>6. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
+  );
+}
+
+function monthShortLabel(date) {
+  return new Intl.DateTimeFormat("en-US", { month: "short" }).format(date);
+}
+
+function formatRangeLabel(startDate, endDate) {
+  const sameMonth =
+    startDate.getMonth() === endDate.getMonth() &&
+    startDate.getFullYear() === endDate.getFullYear();
+
+  if (sameMonth) {
+    return `${startDate.getDate()}-${endDate.getDate()} ${monthShortLabel(startDate)} ${startDate.getFullYear()}`;
+  }
+
+  return `${startDate.getDate()} ${monthShortLabel(startDate)} - ${endDate.getDate()} ${monthShortLabel(endDate)} ${endDate.getFullYear()}`;
+}
+
+function buildDateRangeButtons(records) {
+  const uniqueDates = [...new Set(records.map((record) => dateKey(record.A)))].sort(
+    (a, b) => new Date(a) - new Date(b),
+  );
+
+  const groups = [];
+  for (let index = 0; index < uniqueDates.length; index += DATE_GROUP_SIZE) {
+    const slice = uniqueDates.slice(index, index + DATE_GROUP_SIZE);
+    const startDate = new Date(slice[0]);
+    const endDate = new Date(slice[slice.length - 1]);
+
+    groups.push({
+      start: slice[0],
+      end: slice[slice.length - 1],
+      label: formatRangeLabel(startDate, endDate),
+    });
+  }
+
+  return groups
+    .map((group) => [
+      {
+        text: group.label,
+        callback_data: `date_range:${group.start}:${group.end}`,
+      },
+    ])
+    .concat([[{ text: "Check All", callback_data: "check_all" }]]);
+}
+
+async function sendFilteredRecords(ctx, records) {
+  if (records.length === 0) {
+    await ctx.answerCbQuery("No matching records found for this date range.");
+    return;
+  }
+
+  await ctx.answerCbQuery();
+
+  for (const record of records) {
+    await ctx.reply(buildMessage(record), {
+      parse_mode: "HTML",
+    });
+    await sleep(150);
+  }
+
+  await ctx.reply(
+    `Completed. Found ${records.length} matching record(s) for the selected date range.`,
   );
 }
 
@@ -138,26 +210,19 @@ function sleep(ms) {
 
 const bot = new Telegraf(BOT_TOKEN);
 const selectedModeByChat = new Map();
+const commentRecordsByChat = new Map();
 
 const modeKeyboard = {
   reply_markup: {
-    keyboard: [[CHECK_RATINGS, CHECK_COMMENTS]],
+    keyboard: [[CHECK_COMMENTS]],
     resize_keyboard: true,
   },
 };
 
 bot.start((ctx) => {
   ctx.reply(
-    "Ընտրեք ստուգման տեսակը, ապա ուղարկեք .xlsx ֆայլ։",
+    "Սեղմեք «Մեկնաբանություն» կոճակը, ապա ուղարկեք .xlsx ֆայլ։",
     modeKeyboard,
-  );
-});
-
-bot.hears(CHECK_RATINGS, (ctx) => {
-  selectedModeByChat.set(ctx.chat.id, "ratings");
-  return ctx.reply(
-    `Ընտրված է F և G սյուների ստուգումը։ Ուղարկեք .xlsx ֆայլ։\n` +
-      `Կուղարկվեն այն տողերը, որտեղ F կամ G արժեքը ցածր է ${THRESHOLD}-ից։`,
   );
 });
 
@@ -170,7 +235,7 @@ bot.hears(CHECK_COMMENTS, (ctx) => {
 
 bot.on("document", async (ctx) => {
   const mode = selectedModeByChat.get(ctx.chat.id);
-  if (!mode) return;
+  if (mode !== "comments") return;
 
   const doc = ctx.message.document;
   const fileName = (doc.file_name || "").toLowerCase();
@@ -192,61 +257,66 @@ bot.on("document", async (ctx) => {
     await workbook.xlsx.load(buffer);
     const sheet = workbook.worksheets[workbook.worksheets.length - 1];
 
-    let matches = 0;
-    let rowsChecked = 0;
+    const records = [];
 
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
       const excelRow = sheet.getRow(rowNumber);
-
-      // Skip fully empty rows
       if (!excelRow.hasValues) continue;
 
-      rowsChecked++;
+      const dateValue = excelRow.getCell(COL.A).value;
+      const commentValue = excelRow.getCell(COL.I).value;
 
-      const get = (letter) => excelRow.getCell(COL[letter]).value;
+      if (!hasContent(commentValue)) continue;
 
-      const fRaw = get("F");
-      const gRaw = get("G");
-      const isDash = (value) => String(value ?? "").trim() === "-";
-      const isLow =
-        (toNumber(fRaw) !== null && toNumber(fRaw) < THRESHOLD) ||
-        (toNumber(gRaw) !== null && toNumber(gRaw) < THRESHOLD) ||
-        isDash(fRaw) ||
-        isDash(gRaw);
-      const hasComment = hasContent(get("I"));
-      const shouldSend = mode === "ratings" ? isLow : hasComment;
+      const parsedDate = toDate(dateValue);
+      if (!parsedDate) continue;
 
-      if (shouldSend) {
-        const rowValues = {};
-        for (const letter of Object.keys(COL)) {
-          rowValues[letter] = get(letter);
-        }
-        await ctx.reply(buildMessage(rowValues), {
-          parse_mode: "HTML",
-        });
-        matches++;
-        // small delay to be gentle on Telegram's rate limits
-        await sleep(150);
+      const row = {};
+      for (const [letter, columnIndex] of Object.entries(COL)) {
+        row[letter] = excelRow.getCell(columnIndex).value;
       }
+
+      row.A = parsedDate;
+      records.push(row);
     }
 
-    if (matches === 0) {
-      await ctx.reply(
-        mode === "ratings"
-          ? `Checked ${rowsChecked} rows. No rows found with F or G below ${THRESHOLD}.`
-          : `Checked ${rowsChecked} rows. No rows found with a comment in column I.`,
-      );
-    } else {
-      await ctx.reply(
-        `Done. Checked ${rowsChecked} rows, found ${matches} matching row(s) above.`,
-      );
+    commentRecordsByChat.set(ctx.chat.id, records);
+
+    if (records.length === 0) {
+      await ctx.reply("Checked the uploaded file. No rows with comments in column I were found.");
+      return;
     }
+
+    await ctx.reply("Choose a date range to filter the comment results:", {
+      reply_markup: {
+        inline_keyboard: buildDateRangeButtons(records),
+      },
+    });
   } catch (err) {
     console.error(err);
     await ctx.reply(
       `Sorry, something went wrong while reading the file: ${err.message}`,
     );
   }
+});
+
+bot.action("check_all", async (ctx) => {
+  const records = commentRecordsByChat.get(ctx.chat.id) || [];
+  await sendFilteredRecords(ctx, records);
+});
+
+bot.action(/^date_range:([0-9-]+):([0-9-]+)$/, async (ctx, next) => {
+  const startKey = ctx.match[1];
+  const endKey = ctx.match[2];
+
+  const records = commentRecordsByChat.get(ctx.chat.id) || [];
+  const filtered = records.filter((record) => {
+    const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
+    return date >= startKey && date <= endKey;
+  });
+
+  await sendFilteredRecords(ctx, filtered);
+  return next();
 });
 
 bot.catch((err, ctx) => {
