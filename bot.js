@@ -370,6 +370,12 @@ bot.on("document", async (ctx) => {
 
       const commentValue = excelRow.getCell(COL.I).value;
 
+      if (hasContent(commentValue)) {
+        console.log(
+          `[COMMENT ROW] row=${rowNumber} A=${formatValue(dateValue)} I=${formatValue(commentValue)}`,
+        );
+      }
+
       if (!hasContent(commentValue)) continue;
       if (!parsedDate) continue;
 
