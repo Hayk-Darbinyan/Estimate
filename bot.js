@@ -29,6 +29,7 @@ if (!PUBLIC_URL) {
 }
 
 const CHECK_COMMENTS = "Մեկնաբանություն";
+const DATE_GROUP_SIZE = 5;
 
 // A random-ish but stable path so random internet traffic can't hit your
 // webhook endpoint and pretend to be Telegram. Derived from the bot token
@@ -139,72 +140,51 @@ function buildMessage(row) {
   );
 }
 
-function monthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+function monthShortLabel(date) {
+  return new Intl.DateTimeFormat("en-US", { month: "short" }).format(date);
 }
 
-function monthLabel(date) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    year: "numeric",
-  }).format(date);
+function formatRangeLabel(startDate, endDate) {
+  const sameMonth =
+    startDate.getMonth() === endDate.getMonth() &&
+    startDate.getFullYear() === endDate.getFullYear();
+
+  if (sameMonth) {
+    return `${startDate.getDate()}-${endDate.getDate()} ${monthShortLabel(startDate)} ${startDate.getFullYear()}`;
+  }
+
+  return `${startDate.getDate()} ${monthShortLabel(startDate)} - ${endDate.getDate()} ${monthShortLabel(endDate)} ${endDate.getFullYear()}`;
 }
 
-function getUniqueMonths(records) {
-  const months = [...new Set(records.map((record) => monthKey(record.A)))];
-  return months.sort();
-}
+function buildDateRangeButtons(records) {
+  const uniqueDates = [...new Set(records.map((record) => dateKey(record.A)))].sort(
+    (a, b) => new Date(a) - new Date(b),
+  );
 
-function buildMonthCalendar(state) {
-  const availableDates = new Set(state.records.map((record) => dateKey(record.A)));
-  const [year, month] = state.currentMonthKey.split("-").map(Number);
-  const monthDate = new Date(year, month - 1, 1);
-  const firstDay = new Date(year, month - 1, 1);
-  const lastDay = new Date(year, month, 0);
-  const dayNames = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const groups = [];
+  for (let index = 0; index < uniqueDates.length; index += DATE_GROUP_SIZE) {
+    const slice = uniqueDates.slice(index, index + DATE_GROUP_SIZE);
+    const startDate = new Date(slice[0]);
+    const endDate = new Date(slice[slice.length - 1]);
 
-  const rows = [
-    [
-      { text: "⬅️", callback_data: `calendar_nav:prev:${state.currentMonthKey}` },
-      { text: monthLabel(monthDate), callback_data: "calendar_month_label" },
-      { text: "➡️", callback_data: `calendar_nav:next:${state.currentMonthKey}` },
-    ],
-    ...dayNames.map((day) => [{ text: day, callback_data: "calendar_day_label" }]),
-  ];
-
-  const startOffset = firstDay.getDay();
-  const blanksBefore = Array.from({ length: startOffset }, () => ({ text: " ", callback_data: "calendar_empty" }));
-  const datesInMonth = [];
-
-  for (let day = 1; day <= lastDay.getDate(); day++) {
-    const date = new Date(year, month - 1, day);
-    const key = dateKey(date);
-    const exists = availableDates.has(key);
-    const isSelectable = exists && (!state.startDate || state.step === "end" ? true : true);
-
-    if (exists) {
-      const isBeforeStart =
-        state.step === "end" && state.startDate && date < new Date(state.startDate.getTime());
-
-      const callback = isBeforeStart ? "calendar_disabled" : `calendar:${state.step}:${key}`;
-      const text = String(day);
-      datesInMonth.push({ text, callback_data: callback, disabled: isBeforeStart });
-    } else {
-      datesInMonth.push({ text: " ", callback_data: "calendar_empty" });
-    }
+    groups.push({
+      start: slice[0],
+      end: slice[slice.length - 1],
+      label: formatRangeLabel(startDate, endDate),
+    });
   }
 
-  const cells = [...blanksBefore, ...datesInMonth];
-  while (cells.length % 7 !== 0) {
-    cells.push({ text: " ", callback_data: "calendar_empty" });
-  }
-
-  for (let index = 0; index < cells.length; index += 7) {
-    rows.push(cells.slice(index, index + 7));
-  }
-
-  rows.push([{ text: "Check All", callback_data: "check_all" }]);
-  return { inline_keyboard: rows };
+  return groups
+    .map((group) => [
+      {
+        text: group.label,
+        callback_data: `date_range:${group.start}:${group.end}`,
+      },
+    ])
+    .concat([
+      [{ text: "Check All", callback_data: "check_all" }],
+      [{ text: "Custom Date Range", callback_data: "custom_date_range" }],
+    ]);
 }
 
 async function sendFilteredRecords(ctx, records) {
@@ -234,7 +214,7 @@ function sleep(ms) {
 const bot = new Telegraf(BOT_TOKEN);
 const selectedModeByChat = new Map();
 const commentRecordsByChat = new Map();
-const calendarStateByChat = new Map();
+const pendingCustomRangeByChat = new Map();
 
 const modeKeyboard = {
   reply_markup: {
@@ -311,17 +291,10 @@ bot.on("document", async (ctx) => {
       return;
     }
 
-    const months = getUniqueMonths(records);
-    calendarStateByChat.set(ctx.chat.id, {
-      records,
-      startDate: null,
-      endDate: null,
-      step: "start",
-      currentMonthKey: months[0],
-    });
-
-    await ctx.reply("Select start date:", {
-      reply_markup: buildMonthCalendar(calendarStateByChat.get(ctx.chat.id)),
+    await ctx.reply("Choose a date range to filter the comment results:", {
+      reply_markup: {
+        inline_keyboard: buildDateRangeButtons(records),
+      },
     });
   } catch (err) {
     console.error(err);
@@ -336,54 +309,61 @@ bot.action("check_all", async (ctx) => {
   await sendFilteredRecords(ctx, records);
 });
 
-bot.action(/^calendar_nav:(prev|next):([0-9]{4}-[0-9]{2})$/, async (ctx) => {
-  const state = calendarStateByChat.get(ctx.chat.id);
-  if (!state) return;
-
-  const months = getUniqueMonths(state.records);
-  const currentIndex = months.indexOf(state.currentMonthKey);
-  let targetIndex = currentIndex;
-
-  if (ctx.match[1] === "prev") {
-    targetIndex = Math.max(0, currentIndex - 1);
-  } else {
-    targetIndex = Math.min(months.length - 1, currentIndex + 1);
-  }
-
-  state.currentMonthKey = months[targetIndex];
-  await ctx.editMessageText(
-    state.step === "start" ? "Select start date:" : "Select end date:",
-    { reply_markup: buildMonthCalendar(state) },
+bot.action("custom_date_range", async (ctx) => {
+  pendingCustomRangeByChat.set(ctx.chat.id, true);
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    "Please enter your custom date range in the same format used in the Excel file, for example: 9/1/2026 - 9/7/2026",
   );
 });
 
-bot.action(/^calendar:(start|end):([0-9]{4}-[0-9]{2}-[0-9]{2})$/, async (ctx) => {
-  const state = calendarStateByChat.get(ctx.chat.id);
-  if (!state) return;
-
-  const selectedDate = new Date(`${ctx.match[2]}T00:00:00`);
-
-  if (ctx.match[1] === "start") {
-    state.startDate = selectedDate;
-    state.step = "end";
-    state.currentMonthKey = monthKey(selectedDate);
-    await ctx.editMessageText("Select end date:", {
-      reply_markup: buildMonthCalendar(state),
-    });
+bot.hears(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})$/i, async (ctx) => {
+  if (!pendingCustomRangeByChat.get(ctx.chat.id)) {
     return;
   }
 
-  state.endDate = selectedDate;
+  pendingCustomRangeByChat.delete(ctx.chat.id);
+
+  const startRaw = ctx.match[1];
+  const endRaw = ctx.match[2];
+
+  const startDate = toDate(startRaw);
+  const endDate = toDate(endRaw);
+
+  if (!startDate || !endDate) {
+    await ctx.reply("Invalid date format. Please use this format: 9/1/2026 - 9/7/2026");
+    return;
+  }
+
+  if (startDate > endDate) {
+    await ctx.reply("The start date cannot be after the end date. Please enter the range again.");
+    return;
+  }
+
   const records = commentRecordsByChat.get(ctx.chat.id) || [];
-  const startKey = dateKey(state.startDate);
-  const endKey = dateKey(state.endDate);
+  const startKey = dateKey(startDate);
+  const endKey = dateKey(endDate);
+
   const filtered = records.filter((record) => {
-    const recordKey = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
-    return recordKey >= startKey && recordKey <= endKey;
+    const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
+    return date >= startKey && date <= endKey;
   });
 
-  calendarStateByChat.delete(ctx.chat.id);
   await sendFilteredRecords(ctx, filtered);
+});
+
+bot.action(/^date_range:([0-9-]+):([0-9-]+)$/, async (ctx, next) => {
+  const startKey = ctx.match[1];
+  const endKey = ctx.match[2];
+
+  const records = commentRecordsByChat.get(ctx.chat.id) || [];
+  const filtered = records.filter((record) => {
+    const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
+    return date >= startKey && date <= endKey;
+  });
+
+  await sendFilteredRecords(ctx, filtered);
+  return next();
 });
 
 bot.catch((err, ctx) => {
