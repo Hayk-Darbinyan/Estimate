@@ -50,11 +50,14 @@ const WEBHOOK_SECRET = crypto
 
 // Column letters -> 1-indexed column numbers (ExcelJS uses 1-indexed columns)
 const COL = {
-  A: 1, // Գնման ամսաթիվ
-  B: 2, // Հեռախոսահամար
-  C: 3, // Գնորդ
-  D: 4, // Գնած մոդել
-  E: 5, // Սպասարկող
+  A: 1, // Գնման ամսաթիվ  (purchase date — used for date grouping/filtering)
+  B: 2, // Զանգի ամսաթիվ  (call date)
+  C: 3, // Հեռախոսահամար
+  D: 4, // Գնորդ
+  E: 5, // Գնում/սպասարկում
+  F: 6, // Սպասարկող
+  G: 7, // Գնահատական
+  H: 8, // Որտեղից է տեղեկացել
   I: 9, // Մեկնաբանություն
 };
 
@@ -85,16 +88,20 @@ function parseMDYString(value) {
 }
 
 // Parses DD.MM.YYYY  (the new format, e.g. 14.09.2026)
+// Spaces are stripped first so "11. 09. 26"-style values also parse correctly.
 function parseDMYString(value) {
   if (value === null || value === undefined) return null;
 
-  const trimmed = String(value).trim();
-  const match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  // Remove all whitespace so "11. 09. 2026" becomes "11.09.2026"
+  const trimmed = String(value).replace(/\s+/g, "").trim();
+  const match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
   if (!match) return null;
 
   const day = Number(match[1]);
   const month = Number(match[2]);
-  const year = Number(match[3]);
+  // Expand 2-digit years: 00-49 → 2000-2049, 50-99 → 1950-1999
+  const rawYear = Number(match[3]);
+  const year = rawYear < 100 ? (rawYear < 50 ? 2000 + rawYear : 1900 + rawYear) : rawYear;
 
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
 
@@ -131,13 +138,14 @@ function toDate(value) {
     const trimmed = value.trim();
     if (!trimmed) return null;
 
-    // Try DD.MM.YYYY first (new format), then M/D/YYYY (old format)
+    // Try DD.MM.YYYY first (spaces stripped inside parser), then M/D/YYYY (old format)
     const dmy = parseDMYString(trimmed);
     if (dmy) return dmy;
 
     const mdy = parseMDYString(trimmed);
     if (mdy) return mdy;
 
+    // Last resort: let JS parse it (handles ISO strings etc.)
     const asDate = new Date(trimmed);
     return Number.isNaN(asDate.getTime()) ? null : asDate;
   }
@@ -201,11 +209,14 @@ function escapeHtml(value) {
 function buildMessage(row) {
   return (
     `<b>1. Գնման ամսաթիվ:</b> ${escapeHtml(formatValue(row.A))}\n` +
-    `<b>2. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.B))}\n` +
-    `<b>3. Գնորդ:</b> ${escapeHtml(formatValue(row.C))}\n` +
-    `<b>4. Գնած մոդել:</b> ${escapeHtml(formatValue(row.D))}\n` +
-    `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
-    `<b>6. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
+    `<b>2. Զանգի ամսաթիվ:</b> ${escapeHtml(formatValue(row.B))}\n` +
+    `<b>3. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.C))}\n` +
+    `<b>4. Գնորդ:</b> ${escapeHtml(formatValue(row.D))}\n` +
+    `<b>5. Գնում/սպասարկում:</b> ${escapeHtml(formatValue(row.E))}\n` +
+    `<b>6. Սպասարկող:</b> ${escapeHtml(formatValue(row.F))}\n` +
+    `<b>7. Գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
+    `<b>8. Որտեղից է տեղեկացել:</b> ${escapeHtml(formatValue(row.H))}\n` +
+    `<b>9. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
   );
 }
 
@@ -362,12 +373,18 @@ bot.on("document", async (ctx) => {
       if (!hasContent(commentValue)) continue;
       if (!parsedDate) continue;
 
-      const row = {};
-      for (const [letter, columnIndex] of Object.entries(COL)) {
-        row[letter] = excelRow.getCell(columnIndex).value;
-      }
+      const row = {
+        A: parsedDate,                          // already parsed Date
+        B: excelRow.getCell(COL.B).value,       // Զանգի ամսաթիվ
+        C: excelRow.getCell(COL.C).value,       // Հեռախոսահամար
+        D: excelRow.getCell(COL.D).value,       // Գնորդ
+        E: excelRow.getCell(COL.E).value,       // Գնում/սպասարկում
+        F: excelRow.getCell(COL.F).value,       // Սպասարկող
+        G: excelRow.getCell(COL.G).value,       // Գնահատական
+        H: excelRow.getCell(COL.H).value,       // Որտեղից է տեղեկացել
+        I: commentValue,                        // Մեկնաբանություն (already read)
+      };
 
-      row.A = parsedDate;
       records.push(row);
     }
 
