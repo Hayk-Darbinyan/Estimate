@@ -194,8 +194,15 @@ function formatRangeLabel(startDate, endDate) {
   return `${startDate.getDate()} ${monthShortLabel(startDate)} - ${endDate.getDate()} ${monthShortLabel(endDate)} ${endDate.getFullYear()}`;
 }
 
-function buildDateRangeButtons(records) {
-  const uniqueDates = [...new Set(records.map((record) => dateKey(record.A)))].sort();
+// Builds the predefined range buttons directly from the set of dates that
+// actually occur in column A (across every row, not just the ones that end
+// up with a comment). Grouping by chunking the *sorted list of actual
+// dates* — rather than walking calendar days from min to max — guarantees
+// that every date present in column A lands in exactly one group, with no
+// gaps and no overlaps, even if some calendar day in the middle of the
+// range has no row at all.
+function buildDateRangeButtons(dateKeys) {
+  const uniqueDates = [...new Set(dateKeys)].filter(Boolean).sort();
 
   if (uniqueDates.length === 0) {
     return [
@@ -204,28 +211,17 @@ function buildDateRangeButtons(records) {
     ];
   }
 
-  const startDate = dateFromKey(uniqueDates[0]);
-  const endDate = dateFromKey(uniqueDates[uniqueDates.length - 1]);
-
   const groups = [];
-  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-
-  while (cursor <= endDate) {
-    const groupStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
-    const groupEndRaw = new Date(
-      cursor.getFullYear(),
-      cursor.getMonth(),
-      cursor.getDate() + DATE_GROUP_SIZE - 1,
-    );
-    const groupEnd = groupEndRaw > endDate ? endDate : groupEndRaw;
+  for (let i = 0; i < uniqueDates.length; i += DATE_GROUP_SIZE) {
+    const chunkKeys = uniqueDates.slice(i, i + DATE_GROUP_SIZE);
+    const groupStart = dateFromKey(chunkKeys[0]);
+    const groupEnd = dateFromKey(chunkKeys[chunkKeys.length - 1]);
 
     groups.push({
-      start: dateKey(groupStart),
-      end: dateKey(groupEnd),
+      start: chunkKeys[0],
+      end: chunkKeys[chunkKeys.length - 1],
       label: formatRangeLabel(groupStart, groupEnd),
     });
-
-    cursor = new Date(groupEnd.getFullYear(), groupEnd.getMonth(), groupEnd.getDate() + 1);
   }
 
   return groups
@@ -242,12 +238,24 @@ function buildDateRangeButtons(records) {
 }
 
 async function sendFilteredRecords(ctx, records) {
+  // callback_query updates (button taps) need answerCbQuery to clear the
+  // loading spinner; plain text updates (the custom-range flow) have no
+  // callback query to answer, and calling it anyway throws and aborts the
+  // whole handler before anything is sent back to the user.
+  const isCallback = Boolean(ctx.callbackQuery);
+
   if (records.length === 0) {
-    await ctx.answerCbQuery("No matching records found for this date range.");
+    if (isCallback) {
+      await ctx.answerCbQuery("No matching records found for this date range.");
+    } else {
+      await ctx.reply("No matching records found for this date range.");
+    }
     return;
   }
 
-  await ctx.answerCbQuery();
+  if (isCallback) {
+    await ctx.answerCbQuery();
+  }
 
   for (const record of records) {
     await ctx.reply(buildMessage(record), {
@@ -316,17 +324,25 @@ bot.on("document", async (ctx) => {
     const sheet = workbook.worksheets[workbook.worksheets.length - 1];
 
     const records = [];
+    const allDateKeys = new Set();
 
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
       const excelRow = sheet.getRow(rowNumber);
       if (!excelRow.hasValues) continue;
 
       const dateValue = excelRow.getCell(COL.A).value;
+      const parsedDate = toDate(dateValue);
+
+      // Track every date that actually appears in column A, regardless of
+      // whether that row has a comment, so the predefined range buttons
+      // can be built from the file's real date coverage.
+      if (parsedDate) {
+        allDateKeys.add(dateKey(parsedDate));
+      }
+
       const commentValue = excelRow.getCell(COL.I).value;
 
       if (!hasContent(commentValue)) continue;
-
-      const parsedDate = toDate(dateValue);
       if (!parsedDate) continue;
 
       const row = {};
@@ -347,7 +363,7 @@ bot.on("document", async (ctx) => {
 
     await ctx.reply("Choose a date range to filter the comment results:", {
       reply_markup: {
-        inline_keyboard: buildDateRangeButtons(records),
+        inline_keyboard: buildDateRangeButtons(allDateKeys),
       },
     });
   } catch (err) {
