@@ -58,6 +58,7 @@ const COL = {
   I: 9, // Մեկնաբանություն
 };
 
+// Parses M/D/YYYY  (the old format, e.g. 9/14/2026)
 function parseMDYString(value) {
   if (value === null || value === undefined) return null;
 
@@ -67,6 +68,32 @@ function parseMDYString(value) {
 
   const month = Number(match[1]);
   const day = Number(match[2]);
+  const year = Number(match[3]);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const parsedDate = new Date(year, month - 1, day);
+  if (
+    parsedDate.getFullYear() !== year ||
+    parsedDate.getMonth() !== month - 1 ||
+    parsedDate.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return parsedDate;
+}
+
+// Parses DD.MM.YYYY  (the new format, e.g. 14.09.2026)
+function parseDMYString(value) {
+  if (value === null || value === undefined) return null;
+
+  const trimmed = String(value).trim();
+  const match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
   const year = Number(match[3]);
 
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
@@ -104,8 +131,12 @@ function toDate(value) {
     const trimmed = value.trim();
     if (!trimmed) return null;
 
-    const mdY = parseMDYString(trimmed);
-    if (mdY) return mdY;
+    // Try DD.MM.YYYY first (new format), then M/D/YYYY (old format)
+    const dmy = parseDMYString(trimmed);
+    if (dmy) return dmy;
+
+    const mdy = parseMDYString(trimmed);
+    if (mdy) return mdy;
 
     const asDate = new Date(trimmed);
     return Number.isNaN(asDate.getTime()) ? null : asDate;
@@ -194,13 +225,6 @@ function formatRangeLabel(startDate, endDate) {
   return `${startDate.getDate()} ${monthShortLabel(startDate)} - ${endDate.getDate()} ${monthShortLabel(endDate)} ${endDate.getFullYear()}`;
 }
 
-// Builds the predefined range buttons directly from the set of dates that
-// actually occur in column A (across every row, not just the ones that end
-// up with a comment). Grouping by chunking the *sorted list of actual
-// dates* — rather than walking calendar days from min to max — guarantees
-// that every date present in column A lands in exactly one group, with no
-// gaps and no overlaps, even if some calendar day in the middle of the
-// range has no row at all.
 function buildDateRangeButtons(dateKeys) {
   const uniqueDates = [...new Set(dateKeys)].filter(Boolean).sort();
 
@@ -238,10 +262,6 @@ function buildDateRangeButtons(dateKeys) {
 }
 
 async function sendFilteredRecords(ctx, records) {
-  // callback_query updates (button taps) need answerCbQuery to clear the
-  // loading spinner; plain text updates (the custom-range flow) have no
-  // callback query to answer, and calling it anyway throws and aborts the
-  // whole handler before anything is sent back to the user.
   const isCallback = Boolean(ctx.callbackQuery);
 
   if (records.length === 0) {
@@ -333,9 +353,6 @@ bot.on("document", async (ctx) => {
       const dateValue = excelRow.getCell(COL.A).value;
       const parsedDate = toDate(dateValue);
 
-      // Track every date that actually appears in column A, regardless of
-      // whether that row has a comment, so the predefined range buttons
-      // can be built from the file's real date coverage.
       if (parsedDate) {
         allDateKeys.add(dateKey(parsedDate));
       }
@@ -383,44 +400,51 @@ bot.action("custom_date_range", async (ctx) => {
   pendingCustomRangeByChat.set(ctx.chat.id, true);
   await ctx.answerCbQuery();
   await ctx.reply(
-    "Please enter your custom date range in the same format used in the Excel file, for example: 9/1/2026 - 9/7/2026",
+    "Please enter your custom date range in DD.MM.YYYY format, for example: 01.09.2026 - 07.09.2026",
   );
 });
 
-bot.hears(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})$/i, async (ctx) => {
-  if (!pendingCustomRangeByChat.get(ctx.chat.id)) {
-    return;
-  }
+// Handles both DD.MM.YYYY - DD.MM.YYYY  and  M/D/YYYY - M/D/YYYY
+bot.hears(
+  /^(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})\s*-\s*(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})$/i,
+  async (ctx) => {
+    if (!pendingCustomRangeByChat.get(ctx.chat.id)) {
+      return;
+    }
 
-  pendingCustomRangeByChat.delete(ctx.chat.id);
+    pendingCustomRangeByChat.delete(ctx.chat.id);
 
-  const startRaw = ctx.match[1];
-  const endRaw = ctx.match[2];
+    const startRaw = ctx.match[1];
+    const endRaw = ctx.match[2];
 
-  const startDate = parseMDYString(startRaw);
-  const endDate = parseMDYString(endRaw);
+    // Try DD.MM.YYYY first, then M/D/YYYY
+    const startDate = parseDMYString(startRaw) || parseMDYString(startRaw);
+    const endDate = parseDMYString(endRaw) || parseMDYString(endRaw);
 
-  if (!startDate || !endDate) {
-    await ctx.reply("Invalid date format. Please use this format: 9/1/2026 - 9/7/2026");
-    return;
-  }
+    if (!startDate || !endDate) {
+      await ctx.reply(
+        "Invalid date format. Please use DD.MM.YYYY, for example: 01.09.2026 - 07.09.2026",
+      );
+      return;
+    }
 
-  const startKey = dateKey(startDate);
-  const endKey = dateKey(endDate);
+    const startKey = dateKey(startDate);
+    const endKey = dateKey(endDate);
 
-  if (startKey > endKey) {
-    await ctx.reply("The start date cannot be after the end date. Please enter the range again.");
-    return;
-  }
+    if (startKey > endKey) {
+      await ctx.reply("The start date cannot be after the end date. Please enter the range again.");
+      return;
+    }
 
-  const records = commentRecordsByChat.get(ctx.chat.id) || [];
-  const filtered = records.filter((record) => {
-    const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
-    return date >= startKey && date <= endKey;
-  });
+    const records = commentRecordsByChat.get(ctx.chat.id) || [];
+    const filtered = records.filter((record) => {
+      const date = dateKey(record.A instanceof Date ? record.A : toDate(record.A));
+      return date >= startKey && date <= endKey;
+    });
 
-  await sendFilteredRecords(ctx, filtered);
-});
+    await sendFilteredRecords(ctx, filtered);
+  },
+);
 
 bot.action(/^date_range:([0-9-]+):([0-9-]+)$/, async (ctx, next) => {
   const startKey = ctx.match[1];
@@ -440,26 +464,14 @@ bot.catch((err, ctx) => {
   console.error(`Telegraf error for update ${ctx.updateType}:`, err);
 });
 
-// ---------------------------------------------------------------------
-// Express server: this is what makes the app a valid Render Web Service.
-// Render requires the process to bind to process.env.PORT and answer
-// HTTP requests — that's how it knows the service is alive, and it's also
-// what lets Telegram's webhook calls (or an external pinger) wake it up.
-// ---------------------------------------------------------------------
 const app = express();
 
-// Telegraf needs the raw JSON body of incoming updates.
 app.use(express.json());
 
-// Health check / keep-alive endpoint. Render's own health checks hit this,
-// and you can optionally point an external uptime pinger (see README) at
-// it to reduce how often the instance goes to sleep.
 app.get("/", (req, res) => {
   res.status(200).send("Bot is running.");
 });
 
-// Telegram webhook endpoint. Only requests carrying the correct secret
-// header are treated as genuine Telegram traffic.
 app.post(WEBHOOK_PATH, (req, res, next) => {
   const incomingSecret = req.header("X-Telegram-Bot-Api-Secret-Token");
   if (incomingSecret !== WEBHOOK_SECRET) {
@@ -489,6 +501,5 @@ main().catch((err) => {
   process.exit(1);
 });
 
-// Graceful shutdown
 process.once("SIGINT", () => process.exit(0));
 process.once("SIGTERM", () => process.exit(0));
