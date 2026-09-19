@@ -48,18 +48,15 @@ const WEBHOOK_SECRET = crypto
   .digest("hex")
   .slice(0, 32);
 
-// Column letters -> 1-indexed column numbers (ExcelJS uses 1-indexed columns)
-const COL = {
-  A: 1, // Գնման ամսաթիվ  (purchase date — used for date grouping/filtering)
-  B: 2, // Զանգի ամսաթիվ  (call date)
-  C: 3, // Հեռախոսահամար
-  D: 4, // Գնորդ
-  E: 5, // Գնում/սպասարկում
-  F: 6, // Սպասարկող
-  G: 7, // Գնահատական
-  H: 8, // Որտեղից է տեղեկացել
-  I: 9, // Մեկնաբանություն
-};
+const REQUIRED_HEADERS = [
+  "Գնման ամսաթիվ",
+  "Գնորդ",
+  "Հեռախոսահամար",
+  "Գնում/սպասարկում",
+  "Սպասարկման գնահատական",
+  "Գիտելիքի գնահատական",
+  CHECK_COMMENTS,
+];
 
 // Parses M/D/YYYY  (the old format, e.g. 9/14/2026)
 function normalizeDateString(value) {
@@ -216,14 +213,12 @@ function escapeHtml(value) {
 function buildMessage(row) {
   return (
     `<b>1. Գնման ամսաթիվ:</b> ${escapeHtml(formatValue(row.A))}\n` +
-    `<b>2. Զանգի ամսաթիվ:</b> ${escapeHtml(formatValue(row.B))}\n` +
+    `<b>2. Գնորդ:</b> ${escapeHtml(formatValue(row.B))}\n` +
     `<b>3. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.C))}\n` +
-    `<b>4. Գնորդ:</b> ${escapeHtml(formatValue(row.D))}\n` +
-    `<b>5. Գնում/սպասարկում:</b> ${escapeHtml(formatValue(row.E))}\n` +
-    `<b>6. Սպասարկող:</b> ${escapeHtml(formatValue(row.F))}\n` +
-    `<b>7. Գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
-    `<b>8. Որտեղից է տեղեկացել:</b> ${escapeHtml(formatValue(row.H))}\n` +
-    `<b>9. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.I))}`
+    `<b>4. Գնում/սպասարկում:</b> ${escapeHtml(formatValue(row.D))}\n` +
+    `<b>5. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.E))}\n` +
+    `<b>6. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
+    `<b>7. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.G))}`
   );
 }
 
@@ -361,6 +356,22 @@ bot.on("document", async (ctx) => {
     await workbook.xlsx.load(buffer);
     const sheet = workbook.worksheets[workbook.worksheets.length - 1];
 
+    const headerColumns = new Map();
+    sheet.getRow(1).eachCell((cell, columnNumber) => {
+      const header = String(cell.value ?? "").trim();
+      if (header) headerColumns.set(header, columnNumber);
+    });
+
+    const missingHeaders = REQUIRED_HEADERS.filter(
+      (header) => !headerColumns.has(header),
+    );
+    if (missingHeaders.length > 0) {
+      throw new Error(`Missing required Excel column(s): ${missingHeaders.join(", ")}`);
+    }
+
+    const dateColumn = headerColumns.get("Գնման ամսաթիվ");
+    const commentColumn = headerColumns.get(CHECK_COMMENTS);
+
     const records = [];
     const allDateKeys = new Set();
 
@@ -368,14 +379,14 @@ bot.on("document", async (ctx) => {
       const excelRow = sheet.getRow(rowNumber);
       if (!excelRow.hasValues) continue;
 
-      const dateValue = excelRow.getCell(COL.A).value;
+      const dateValue = excelRow.getCell(dateColumn).value;
       const parsedDate = toDate(dateValue);
 
       if (parsedDate) {
         allDateKeys.add(dateKey(parsedDate));
       }
 
-      const commentValue = excelRow.getCell(COL.I).value;
+      const commentValue = excelRow.getCell(commentColumn).value;
 
       if (hasContent(commentValue)) {
         console.log(
@@ -388,14 +399,12 @@ bot.on("document", async (ctx) => {
 
       const row = {
         A: parsedDate,                          // already parsed Date
-        B: excelRow.getCell(COL.B).value,       // Զանգի ամսաթիվ
-        C: excelRow.getCell(COL.C).value,       // Հեռախոսահամար
-        D: excelRow.getCell(COL.D).value,       // Գնորդ
-        E: excelRow.getCell(COL.E).value,       // Գնում/սպասարկում
-        F: excelRow.getCell(COL.F).value,       // Սպասարկող
-        G: excelRow.getCell(COL.G).value,       // Գնահատական
-        H: excelRow.getCell(COL.H).value,       // Որտեղից է տեղեկացել
-        I: commentValue,                        // Մեկնաբանություն (already read)
+        B: excelRow.getCell(headerColumns.get("Գնորդ")).value,
+        C: excelRow.getCell(headerColumns.get("Հեռախոսահամար")).value,
+        D: excelRow.getCell(headerColumns.get("Գնում/սպասարկում")).value,
+        E: excelRow.getCell(headerColumns.get("Սպասարկման գնահատական")).value,
+        F: excelRow.getCell(headerColumns.get("Գիտելիքի գնահատական")).value,
+        G: commentValue,
       };
 
       records.push(row);
@@ -404,7 +413,7 @@ bot.on("document", async (ctx) => {
     commentRecordsByChat.set(ctx.chat.id, records);
 
     if (records.length === 0) {
-      await ctx.reply("Checked the uploaded file. No rows with comments in column I were found.");
+      await ctx.reply("Checked the uploaded file. No rows with comments were found.");
       return;
     }
 
