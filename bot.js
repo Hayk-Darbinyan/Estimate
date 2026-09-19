@@ -62,10 +62,18 @@ const COL = {
 };
 
 // Parses M/D/YYYY  (the old format, e.g. 9/14/2026)
+function normalizeDateString(value) {
+  return String(value)
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[\u2024\u3002\uFF0E]/g, ".")
+    .replace(/[\uFF0F]/g, "/");
+}
+
 function parseMDYString(value) {
   if (value === null || value === undefined) return null;
 
-  const trimmed = String(value).trim();
+  const trimmed = normalizeDateString(value);
   const match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (!match) return null;
 
@@ -92,8 +100,7 @@ function parseMDYString(value) {
 function parseDMYString(value) {
   if (value === null || value === undefined) return null;
 
-  // Remove all whitespace so "11. 09. 2026" becomes "11.09.2026"
-  const trimmed = String(value).replace(/\s+/g, "").trim();
+  const trimmed = normalizeDateString(value);
   const match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
   if (!match) return null;
 
@@ -135,7 +142,7 @@ function toDate(value) {
   }
 
   if (typeof value === "string") {
-    const trimmed = value.trim();
+    const trimmed = normalizeDateString(value);
     if (!trimmed) return null;
 
     // Try DD.MM.YYYY first (spaces stripped inside parser), then M/D/YYYY (old format)
@@ -427,9 +434,9 @@ bot.action("custom_date_range", async (ctx) => {
   );
 });
 
-// Handles both DD.MM.YYYY - DD.MM.YYYY  and  M/D/YYYY - M/D/YYYY
+// Handles both DD.MM.YYYY - DD.MM.YYYY, M/D/YYYY - M/D/YYYY, and alternate dot characters like 15․09․2026
 bot.hears(
-  /^(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})\s*-\s*(\d{1,2}[\/\.]\d{1,2}[\/\.]\d{4})$/i,
+  /^(\d{1,2}[\/\.[\u2024\u2027\u00B7\u2219]]\d{1,2}[\/\.[\u2024\u2027\u00B7\u2219]]\d{4})\s*-\s*(\d{1,2}[\/\.[\u2024\u2027\u00B7\u2219]]\d{1,2}[\/\.[\u2024\u2027\u00B7\u2219]]\d{4})$/i,
   async (ctx) => {
     if (!pendingCustomRangeByChat.get(ctx.chat.id)) {
       return;
