@@ -48,17 +48,6 @@ const WEBHOOK_SECRET = crypto
   .digest("hex")
   .slice(0, 32);
 
-const REQUIRED_HEADERS = [
-  "Գնման ամսաթիվ",
-  "Գնորդ",
-  "Հեռախոսահամար",
-  "Գնում/սպասարկում",
-  "Սպասարկող",
-  "Սպասարկման գնահատական",
-  "Գիտելիքի գնահատական",
-  CHECK_COMMENTS,
-];
-
 // Parses M/D/YYYY  (the old format, e.g. 9/14/2026)
 function normalizeDateString(value) {
   return String(value)
@@ -220,7 +209,9 @@ function buildMessage(row) {
     `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
     `<b>6. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
     `<b>7. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
-    `<b>8. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.H))}`
+    `<b>8. Գնահատական:</b> ${escapeHtml(formatValue(row.I))}\n` +
+    `<b>9. Որտեղից է տեղեկացել:</b> ${escapeHtml(formatValue(row.J))}\n` +
+    `<b>10. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.H))}`
   );
 }
 
@@ -309,35 +300,18 @@ function sleep(ms) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-const selectedModeByChat = new Map();
 const commentRecordsByChat = new Map();
 const pendingCustomRangeByChat = new Map();
 
-const modeKeyboard = {
-  reply_markup: {
-    keyboard: [[CHECK_COMMENTS]],
-    resize_keyboard: true,
-  },
-};
-
 bot.start((ctx) => {
-  ctx.reply(
-    "Սեղմեք «Մեկնաբանություն» կոճակը, ապա ուղարկեք .xlsx ֆայլ։",
-    modeKeyboard,
-  );
-});
-
-bot.hears(CHECK_COMMENTS, (ctx) => {
-  selectedModeByChat.set(ctx.chat.id, "comments");
-  return ctx.reply(
-    "Ընտրված է մեկնաբանությունների ստուգումը։ Ուղարկեք .xlsx ֆայլ։",
-  );
+  ctx.reply("Ուղարկեք .xlsx ֆայլը՝ մեկնաբանությունները ստուգելու համար։", {
+    reply_markup: {
+      remove_keyboard: true,
+    },
+  });
 });
 
 bot.on("document", async (ctx) => {
-  const mode = selectedModeByChat.get(ctx.chat.id);
-  if (mode !== "comments") return;
-
   const doc = ctx.message.document;
   const fileName = (doc.file_name || "").toLowerCase();
 
@@ -364,15 +338,13 @@ bot.on("document", async (ctx) => {
       if (header) headerColumns.set(header, columnNumber);
     });
 
-    const missingHeaders = REQUIRED_HEADERS.filter(
-      (header) => !headerColumns.has(header),
-    );
-    if (missingHeaders.length > 0) {
-      throw new Error(`Missing required Excel column(s): ${missingHeaders.join(", ")}`);
-    }
-
     const dateColumn = headerColumns.get("Գնման ամսաթիվ");
     const commentColumn = headerColumns.get(CHECK_COMMENTS);
+
+    const getOptionalCellValue = (excelRow, header) => {
+      const column = headerColumns.get(header);
+      return column ? excelRow.getCell(column).value : undefined;
+    };
 
     const records = [];
     const allDateKeys = new Set();
@@ -381,14 +353,14 @@ bot.on("document", async (ctx) => {
       const excelRow = sheet.getRow(rowNumber);
       if (!excelRow.hasValues) continue;
 
-      const dateValue = excelRow.getCell(dateColumn).value;
+      const dateValue = dateColumn
+        ? excelRow.getCell(dateColumn).value
+        : undefined;
       const parsedDate = toDate(dateValue);
 
-      if (parsedDate) {
-        allDateKeys.add(dateKey(parsedDate));
-      }
-
-      const commentValue = excelRow.getCell(commentColumn).value;
+      const commentValue = commentColumn
+        ? excelRow.getCell(commentColumn).value
+        : undefined;
 
       if (hasContent(commentValue)) {
         console.log(
@@ -400,17 +372,20 @@ bot.on("document", async (ctx) => {
       if (!parsedDate) continue;
 
       const row = {
-        A: parsedDate,                          // already parsed Date
-        B: excelRow.getCell(headerColumns.get("Գնորդ")).value,
-        C: excelRow.getCell(headerColumns.get("Հեռախոսահամար")).value,
-        D: excelRow.getCell(headerColumns.get("Գնում/սպասարկում")).value,
-        E: excelRow.getCell(headerColumns.get("Սպասարկող")).value,
-        F: excelRow.getCell(headerColumns.get("Սպասարկման գնահատական")).value,
-        G: excelRow.getCell(headerColumns.get("Գիտելիքի գնահատական")).value,
+        A: parsedDate,
+        B: getOptionalCellValue(excelRow, "Գնորդ"),
+        C: getOptionalCellValue(excelRow, "Հեռախոսահամար"),
+        D: getOptionalCellValue(excelRow, "Գնում/սպասարկում"),
+        E: getOptionalCellValue(excelRow, "Սպասարկող"),
+        F: getOptionalCellValue(excelRow, "Սպասարկման գնահատական"),
+        G: getOptionalCellValue(excelRow, "Գիտելիքի գնահատական"),
         H: commentValue,
+        I: getOptionalCellValue(excelRow, "Գնահատական"),
+        J: getOptionalCellValue(excelRow, "Որտեղից է տեղեկացել"),
       };
 
       records.push(row);
+      allDateKeys.add(dateKey(parsedDate));
     }
 
     commentRecordsByChat.set(ctx.chat.id, records);
