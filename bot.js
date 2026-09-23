@@ -53,6 +53,7 @@ const REQUIRED_HEADERS = [
   "Գնորդ",
   "Հեռախոսահամար",
   "Գնում/սպասարկում",
+  "Սպասարկող",
   "Սպասարկման գնահատական",
   "Գիտելիքի գնահատական",
   CHECK_COMMENTS,
@@ -216,9 +217,10 @@ function buildMessage(row) {
     `<b>2. Գնորդ:</b> ${escapeHtml(formatValue(row.B))}\n` +
     `<b>3. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.C))}\n` +
     `<b>4. Գնում/սպասարկում:</b> ${escapeHtml(formatValue(row.D))}\n` +
-    `<b>5. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.E))}\n` +
-    `<b>6. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
-    `<b>7. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.G))}`
+    `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
+    `<b>6. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
+    `<b>7. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
+    `<b>8. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.H))}`
   );
 }
 
@@ -402,9 +404,10 @@ bot.on("document", async (ctx) => {
         B: excelRow.getCell(headerColumns.get("Գնորդ")).value,
         C: excelRow.getCell(headerColumns.get("Հեռախոսահամար")).value,
         D: excelRow.getCell(headerColumns.get("Գնում/սպասարկում")).value,
-        E: excelRow.getCell(headerColumns.get("Սպասարկման գնահատական")).value,
-        F: excelRow.getCell(headerColumns.get("Գիտելիքի գնահատական")).value,
-        G: commentValue,
+        E: excelRow.getCell(headerColumns.get("Սպասարկող")).value,
+        F: excelRow.getCell(headerColumns.get("Սպասարկման գնահատական")).value,
+        G: excelRow.getCell(headerColumns.get("Գիտելիքի գնահատական")).value,
+        H: commentValue,
       };
 
       records.push(row);
