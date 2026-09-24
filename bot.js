@@ -201,18 +201,23 @@ function escapeHtml(value) {
 }
 
 function buildMessage(row) {
-  return (
-    `<b>1. Գնման ամսաթիվ:</b> ${escapeHtml(formatValue(row.A))}\n` +
-    `<b>2. Գնորդ:</b> ${escapeHtml(formatValue(row.B))}\n` +
-    `<b>3. Հեռախոսահամար:</b> ${escapeHtml(formatValue(row.C))}\n` +
-    `<b>4. Գնում/սպասարկում:</b> ${escapeHtml(formatValue(row.D))}\n` +
-    `<b>5. Սպասարկող:</b> ${escapeHtml(formatValue(row.E))}\n` +
-    `<b>6. Սպասարկման գնահատական:</b> ${escapeHtml(formatValue(row.F))}\n` +
-    `<b>7. Գիտելիքի գնահատական:</b> ${escapeHtml(formatValue(row.G))}\n` +
-    `<b>8. Գնահատական:</b> ${escapeHtml(formatValue(row.I))}\n` +
-    `<b>9. Որտեղից է տեղեկացել:</b> ${escapeHtml(formatValue(row.J))}\n` +
-    `<b>10. Մեկնաբանություն:</b> ${escapeHtml(formatValue(row.H))}`
-  );
+  const fields = [
+    ["1. Գնման ամսաթիվ", row.A],
+    ["2. Գնորդ", row.B],
+    ["3. Հեռախոսահամար", row.C],
+    ["4. Գնում/սպասարկում", row.D],
+    ["5. Սպասարկող", row.E],
+    ["6. Սպասարկման գնահատական", row.F],
+    ["7. Գիտելիքի գնահատական", row.G],
+    ["8. Գնահատական", row.I],
+    ["9. Որտեղից է տեղեկացել", row.J],
+    ["10. Մեկնաբանություն", row.H],
+  ];
+
+  return fields
+    .filter(([, value]) => hasContent(value))
+    .map(([label, value]) => `<b>${label}:</b> ${escapeHtml(formatValue(value))}`)
+    .join("\n");
 }
 
 function monthShortLabel(date) {
