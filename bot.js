@@ -210,8 +210,7 @@ function buildMessage(row) {
     ["6. Սպասարկման գնահատական", row.F],
     ["7. Գիտելիքի գնահատական", row.G],
     ["8. Գնահատական", row.I],
-    ["9. Որտեղից է տեղեկացել", row.J],
-    ["10. Մեկնաբանություն", row.H],
+    ["9. Մեկնաբանություն", row.H],
   ];
 
   return fields
@@ -386,7 +385,6 @@ bot.on("document", async (ctx) => {
         G: getOptionalCellValue(excelRow, "Գիտելիքի գնահատական"),
         H: commentValue,
         I: getOptionalCellValue(excelRow, "Գնահատական"),
-        J: getOptionalCellValue(excelRow, "Որտեղից է տեղեկացել"),
       };
 
       records.push(row);
